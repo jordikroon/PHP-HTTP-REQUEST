@@ -1,52 +1,84 @@
 <?php
- 
+
 /** HTTP Request
  * 
  * @author Jordi Kroon
- * @version 1.0.1
+ * @version 1.1.0
  * @copyright 2012 
  */
-
+ 
 class HTTPRequest {
 	
 	public $method;
 	public $useragent;
 
-	private $host; 
+	private $url;
 	private $path;
 	private $errorMessage;
 	
 	public $postFields = array();
-	public $timeout;
-	public $cookiedir;
+	public $timeout = 10;
+	public $cookiedir = 'tmp';
+	public $requestType = 1; // (1 = CURL 2 = ContentRequest)
+	public $forceOneConnection = false;
 	
-	function __construct($host) {
-		$this->host = $host;
+	/** setURL()
+	 * set connection URL
+	 * 
+	 * @param string $host
+	 */
+	 
+	public function setURL($host) {
+		$this->url = $host;
 	}
+	
+	/** getErrorMessage()
+	 * get last error message
+	 * 
+	 * @return string
+	 */
 
-	private function setErrorMessage($message) {
-		$this->errorMessage = $message;
-	}
-	
 	public function getErrorMessage() {
 		return $this->errorMessage;	
 	}
-	
+
+	/** send()
+	 * main send function for sending requests
+	 * 
+	 * @return bool
+	 */
+
 	public function send() {
-		if (function_exists('curl_init')) {
-			return $this->sendCURLRequest($this->host);
+		
+		if($this->requestType !== 2 && function_exists('curl_init')) {
+			$output = $this->sendCURLRequest($this->url);
+		} else {
+			$output = $this->sendContentRequest($this->url);			
 		}
-		else {
-			return $this->sendContentRequest($this->host);
+
+		if(empty($this->result) && $this->forceOneConnection == false && $this->requestType !== 2) {
+			
+			$output = $this->sendContentRequest($this->url);
 		}
+		
+		return $output;
 	}
 
-	private function sendCurlRequest($host) {
+	/** sendCurlRequest()
+	 * send CURL Request
+	 * 
+	 * @param string $url
+	 * 
+	 * @return bool
+	 */
+
+	 
+	private function sendCurlRequest($url) {
 		
 		try {
 			$ch = curl_init();
 			
-			curl_setopt($ch,CURLOPT_URL, $host);
+			curl_setopt($ch,CURLOPT_URL, $url);
 			
 			curl_setopt($ch, CURLOPT_RETURNTRANSFER, TRUE);
 			curl_setopt($ch, CURLOPT_AUTOREFERER, TRUE);
@@ -68,6 +100,7 @@ class HTTPRequest {
 				curl_setopt ($ch, CURLOPT_COOKIEFILE, $ckfile); 
 			}
 			if($this->method == 'post') {
+		
 				curl_setopt($ch,CURLOPT_POST, count($this->postFields));
 				curl_setopt($ch,CURLOPT_POSTFIELDS, http_build_query($this->postFields));
 			}
@@ -77,7 +110,7 @@ class HTTPRequest {
 			if(curl_error($ch)) {
 				throw new Exception('CURL Request failed, ' . curl_error($ch));
 			}
-			$this->setResult($result);
+			$this->result = $result;
 			
 			curl_close($ch);
 			
@@ -86,58 +119,70 @@ class HTTPRequest {
 		
 		catch(Exception $e) {
 			
-			$this->setResult('Error');
-			$this->setErrorMessage('Exception: ' . $e->getMessage());
+			$this->setResult = 'Error';
+			$this->errorMessage = 'Exception: ' . $e->getMessage();
 			
 			return false;
 			
 		}
 	}
 
-	public function sendContentRequest($host) {
+	/** sendContentRequest()
+	 * send content Request @see file_get_contents()
+	 * 
+	 * @param string $url
+	 * 
+	 * @return bool
+	 */
+
+	public function sendContentRequest($url) {
 		
 		try {
-			
-			if($this->method == 'post') {
-				$postdata = http_build_query($this->postFields);
+
+			$opts = array('http' => array());
 				
+			$opts['http']['method'] = 'GET';
+			$opts['http']['header'] = '';
 				
-				$opts = array('http' =>
-				    array(
-				        'method'  => 'POST',
-				        'header'  => "Content-type: application/x-www-form-urlencoded\r\n",
-				        'content' => $postdata
-				    )
-				);
-				
-			}
-			
 			if(!empty($this->userAgent)) {
 				$opts['http']['header'] .= "User-Agent: " . $this->userAgent;
 			}	
-			
+				
 			if(!empty($this->timeout)) {
-				$opts['http']['timeout'] .= $this->timeout;
-			}					
-			
+				$opts['http']['timeout'] = $this->timeout;
+			}	
+
+			if($this->method == 'post') {
+	
+				$postdata = http_build_query($this->postFields);
+				
+				if(!is_array($postdata)) {
+					throw new Exception("Request failed, Invalid POST data ");
+				} else {
+					$opts['http']['method'] = 'POST';	
+					$opts['http']['header'] .= "Content-type: application/x-www-form-urlencoded\r\n";
+					$opts['http']['content'] = $postdata;
+				}
+										
+			}
 			
 			$query  = stream_context_create($opts);
-			if(!$result = @file_get_contents($host,false,$query)) {
+			if(!$result = @file_get_contents($url,false,$query)) {
 				$error = error_get_last();
 				
 				throw new Exception("Request failed, " . $error['message']);
 				
 			}
 			
-			$this->setResult($result);
+			$this->result = $result;
 			
 			return true;
 		} 
 		
 		catch(Exception $e) {
 			
-			$this->setResult('Error');
-			$this->setErrorMessage('Exception: ' . $e->getMessage());
+			$this->result = 'Error';
+			$this->errorMessage = 'Exception: ' . $e->getMessage();
 			
 			return false;
 			
@@ -145,13 +190,16 @@ class HTTPRequest {
 		
 	}
 	
+	/** getResult()
+	 * get result 
+	 * 
+	 * @return mixed
+	 */
+	 
 	public function getResult() {
 		return $this->result;
 	}
 	
-	private function setResult($result) {
-		$this->result = $result;
-	}
 }
 
 ?>
